@@ -83,6 +83,14 @@ class SocketService {
     }
   }
 
+  onConnect(callback: () => void): void {
+    this.socket?.on('connect', callback);
+  }
+
+  onConnectError(callback: (error: Error) => void): void {
+    this.socket?.on('connect_error', callback);
+  }
+
   onUserJoined(callback: (data: { socketId: string; username: string }) => void): void {
     this.socket?.on('user-joined', callback);
   }

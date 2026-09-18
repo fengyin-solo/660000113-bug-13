@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Board } from '../types';
 import { boardApi, templateApi } from '../services/api';
 import { useWhiteboardStore } from '../store/whiteboard';
+import { useErrorStore } from '../store/errorStore';
 import { TemplateCenter } from './TemplateCenter';
 
 interface DashboardProps {
@@ -134,11 +135,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
   const [loading, setLoading] = useState(true);
   const [isTemplateCenterOpen, setIsTemplateCenterOpen] = useState(false);
   const username = useWhiteboardStore((state) => state.username);
+  const dashboardError = useErrorStore((state) => state.errors['dashboard']);
+  const reportError = useErrorStore((state) => state.reportError);
+  const clearError = useErrorStore((state) => state.clearError);
+  const retryRegion = useErrorStore((state) => state.retryRegion);
+  const registerRetryHandler = useErrorStore((state) => state.registerRetryHandler);
 
   const userId = 'user-1';
 
   useEffect(() => {
     loadBoards();
+    // 注册区域重试动作：恢复面板与内联横幅的「重试当前区域」都会触发重新加载
+    return registerRetryHandler('dashboard', () => {
+      loadBoards();
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const loadBoards = async () => {
@@ -146,30 +157,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
       setLoading(true);
       const data = await boardApi.getBoards(userId);
       setBoards(data);
+      // 接口恢复后同步清除区域与恢复面板中的异常
+      clearError('dashboard');
     } catch (error) {
-      console.error('Failed to load boards:', error);
+      const message = error instanceof Error ? error.message : '未知错误';
+      reportError('dashboard', `白板列表加载失败：${message}`, 'api');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleCreateBoard = async (name: string, templateId?: string) => {
+  const handleCreateBoard = async (name: string, templateId: string | undefined, idempotencyKey: string) => {
     try {
       let newBoard: Board | null = null;
       if (templateId) {
-        newBoard = await templateApi.createBoardFromTemplate(templateId, { name, ownerId: userId });
+        newBoard = await templateApi.createBoardFromTemplate(templateId, { name, ownerId: userId }, { idempotencyKey });
       } else {
-        newBoard = await boardApi.createBoard({ name, ownerId: userId });
+        newBoard = await boardApi.createBoard({ name, ownerId: userId }, { idempotencyKey });
       }
       if (newBoard) {
         await loadBoards();
         onBoardSelect(newBoard);
       } else {
-        throw new Error('Failed to create board');
+        throw new Error('服务未返回白板数据');
       }
     } catch (error) {
-      console.error('Failed to create board:', error);
-      alert('创建白板失败，请重试');
+      const message = error instanceof Error ? error.message : '创建白板失败，请重试';
+      reportError('dashboard', `创建白板失败：${message}`, 'api');
+      throw error;
     }
   };
 
@@ -406,6 +421,57 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
       </header>
 
       <main style={{ maxWidth: '1280px', margin: '0 auto', padding: '32px' }}>
+        {dashboardError && !dashboardError.dismissed && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: '12px',
+              padding: '12px 16px',
+              marginBottom: '24px',
+              background: '#fef2f2',
+              border: '1px solid #fecaca',
+              borderRadius: '10px',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '10px', minWidth: 0 }}>
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="#dc2626"
+                strokeWidth="2"
+                style={{ flexShrink: 0 }}
+              >
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <span style={{ fontSize: '13px', color: '#b91c1c', wordBreak: 'break-word' }}>
+                {dashboardError.message}
+                {dashboardError.failures > 1 && `（已连续失败 ${dashboardError.failures} 次）`}
+              </span>
+            </div>
+            <button
+              onClick={() => retryRegion('dashboard')}
+              style={{
+                flexShrink: 0,
+                padding: '6px 14px',
+                fontSize: '13px',
+                fontWeight: 500,
+                color: '#fff',
+                background: '#dc2626',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+              }}
+            >
+              重试当前区域
+            </button>
+          </div>
+        )}
         <div
           style={{
             background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',

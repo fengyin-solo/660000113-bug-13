@@ -37,7 +37,8 @@ router.get('/:id', (req, res) => {
 
 router.post('/:id/create', async (req, res) => {
   try {
-    const { name, ownerId } = req.body;
+    const { name, ownerId, idempotencyKey } = req.body;
+    const idemKey = req.get('Idempotency-Key') || idempotencyKey || null;
     const template = getTemplateById(req.params.id);
 
     if (!template) {
@@ -46,6 +47,15 @@ router.post('/:id/create', async (req, res) => {
 
     if (!ownerId) {
       return res.status(400).json({ error: 'ownerId is required' });
+    }
+
+    // 幂等去重：客户端兜底重试会复用同一键，直接返回首次创建的结果
+    if (idemKey) {
+      const existing = await Board.findByIdempotencyKey(idemKey);
+      if (existing) {
+        console.log(`[Template] Idempotent replay for key ${idemKey}, returning board ${existing._id}`);
+        return res.status(200).json(existing);
+      }
     }
 
     const boardData = {
@@ -62,6 +72,10 @@ router.post('/:id/create', async (req, res) => {
         elements: layer.elements,
       })),
     };
+
+    if (idemKey) {
+      boardData.idempotencyKey = idemKey;
+    }
 
     const board = new Board(boardData);
     const savedBoard = await board.save();

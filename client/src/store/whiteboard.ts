@@ -1,6 +1,13 @@
 import { create } from 'zustand';
 import { Board, BoardElement, CursorPosition, CanvasTransform, ToolType, Layer } from '../types';
 import { socketService } from '../services/socket';
+import { useErrorStore } from './errorStore';
+
+/**
+ * 安全模式下拒绝一切会同步画板数据的操作，
+ * 确保异常兜底期间普通操作与画板数据不会被重复提交。
+ */
+const isSafeModeActive = (): boolean => useErrorStore.getState().safeMode.active;
 
 interface WhiteboardState {
   board: Board | null;
@@ -52,6 +59,7 @@ export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
   setActiveLayerIndex: (index) => set({ activeLayerIndex: index }),
 
   addElement: (element) => {
+    if (isSafeModeActive()) return;
     const { board, activeLayerIndex } = get();
     if (!board) return;
     const layers = [...board.layers];
@@ -64,6 +72,7 @@ export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
   },
 
   updateElement: (elementId, updates) => {
+    if (isSafeModeActive()) return;
     const { board, activeLayerIndex } = get();
     if (!board) return;
     const layers = [...board.layers];
@@ -76,6 +85,7 @@ export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
   },
 
   deleteElement: (elementId) => {
+    if (isSafeModeActive()) return;
     const { board, activeLayerIndex } = get();
     if (!board) return;
     const layers = [...board.layers];
@@ -86,6 +96,7 @@ export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
   },
 
   addLayer: (name) => {
+    if (isSafeModeActive()) return;
     const { board } = get();
     if (!board) return;
     const newLayer: Layer = { name, visible: true, locked: false, order: board.layers.length, elements: [] };
@@ -95,6 +106,7 @@ export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
   },
 
   toggleLayerVisibility: (index) => {
+    if (isSafeModeActive()) return;
     const { board } = get();
     if (!board) return;
     const layers = [...board.layers];
@@ -104,6 +116,7 @@ export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
   },
 
   toggleLayerLock: (index) => {
+    if (isSafeModeActive()) return;
     const { board } = get();
     if (!board) return;
     const layers = [...board.layers];
@@ -113,6 +126,7 @@ export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
   },
 
   setCanvasTransform: (transform) => {
+    if (isSafeModeActive()) return;
     set({ canvasTransform: transform });
     socketService.canvasTransform(transform);
   },

@@ -1,11 +1,12 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import { Template } from '../types';
 import { templateApi } from '../services/api';
 
 interface TemplateCenterProps {
   isOpen: boolean;
   onClose: () => void;
-  onCreate: (name: string, templateId?: string) => void;
+  onCreate: (name: string, templateId: string | undefined, idempotencyKey: string) => void | Promise<void>;
 }
 
 export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose, onCreate }) => {
@@ -15,6 +16,8 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 幂等键：同一次创建意图的重试复用同一键，服务端去重，避免兜底重试重复创建白板
+  const idempotencyKeyRef = useRef<string>(uuidv4());
 
   useEffect(() => {
     if (isOpen) {
@@ -22,6 +25,7 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
       setSelectedTemplate(null);
       setName('');
       setError(null);
+      idempotencyKeyRef.current = uuidv4();
     }
   }, [isOpen]);
 
@@ -52,7 +56,9 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
     try {
       setCreating(true);
       setError(null);
-      await onCreate(boardName, selectedTemplate || undefined);
+      await onCreate(boardName, selectedTemplate || undefined, idempotencyKeyRef.current);
+      // 创建成功后生成新键，不影响下一次正常创建
+      idempotencyKeyRef.current = uuidv4();
       setName('');
       setSelectedTemplate(null);
       onClose();
@@ -72,7 +78,8 @@ export const TemplateCenter: React.FC<TemplateCenterProps> = ({ isOpen, onClose,
     try {
       setCreating(true);
       setError(null);
-      await onCreate(boardName, undefined);
+      await onCreate(boardName, undefined, idempotencyKeyRef.current);
+      idempotencyKeyRef.current = uuidv4();
       setName('');
       setSelectedTemplate(null);
       onClose();

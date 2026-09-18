@@ -45,6 +45,7 @@ class LocalBoard {
     this.width = data.width || 3000;
     this.height = data.height || 2000;
     this.backgroundColor = data.backgroundColor || '#ffffff';
+    this.idempotencyKey = data.idempotencyKey || null;
     this.createdAt = data.createdAt || new Date().toISOString();
     this.updatedAt = data.updatedAt || new Date().toISOString();
   }
@@ -59,6 +60,7 @@ class LocalBoard {
       width: this.width,
       height: this.height,
       backgroundColor: this.backgroundColor,
+      idempotencyKey: this.idempotencyKey,
       createdAt: this.createdAt,
       updatedAt: this.updatedAt,
     };
@@ -118,6 +120,12 @@ class LocalBoard {
     const boards = readBoards();
     const board = boards.find((b) => b._id === id);
     return board || null;
+  }
+
+  static async findByIdempotencyKey(key) {
+    if (!key) return null;
+    const boards = readBoards();
+    return boards.find((b) => b.idempotencyKey && b.idempotencyKey === key) || null;
   }
 
   static async findByIdAndUpdate(id, updates, options = {}) {
