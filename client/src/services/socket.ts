@@ -3,9 +3,17 @@ import { CursorPosition, BoardElement, Layer, CanvasTransform } from '../types';
 
 const SERVER_URL = '/';
 
+type ConnectionListener = (data: { phase: 'connect_error' | 'reconnect_failed'; message: string }) => void;
+
 class SocketService {
   private socket: Socket | null = null;
   private boardId: string | null = null;
+  private username: string | null = null;
+  /** 已经成功加入过的房间标记，保证 join 幂等、不重复提交 */
+  private joined = false;
+  /** 同一次连接生命周期内终态失败只上报一次，避免重复触发兜底 */
+  private terminalReported = false;
+  private connectionListeners = new Set<ConnectionListener>();
 
   connect(): Socket {
     if (!this.socket) {
@@ -16,69 +24,133 @@ class SocketService {
         reconnectionDelay: 2000,
         timeout: 10000,
       });
+
+      // 首次连接失败（含握手错误）
+      this.socket.on('connect_error', (err: Error) => {
+        if (this.socket && this.socket.active) return; // 仍会自动重连，不报错打断
+        if (this.terminalReported) return;
+        this.terminalReported = true;
+        this.emitConnectionFailure('connect_error', err?.message || '无法连接到协作服务');
+      });
+
+      // 自动重连次数耗尽
+      this.socket.io.on('reconnect_failed', () => {
+        if (this.terminalReported) return;
+        this.terminalReported = true;
+        this.emitConnectionFailure('reconnect_failed', '实时连接已断开，重连失败');
+      });
+
+      // 连接（重新）建立：重置上报标记
+      this.socket.on('connect', () => {
+        this.terminalReported = false;
+      });
+
+      // 重连成功后需要重新加入房间（新 socket 会话），但只发一次
+      this.socket.io.on('reconnect', () => {
+        this.joined = false;
+        if (this.boardId && this.username) {
+          this.joinBoard(this.boardId, this.username);
+        }
+      });
     }
     this.socket.connect();
     return this.socket;
   }
 
+  private emitConnectionFailure(phase: 'connect_error' | 'reconnect_failed', message: string) {
+    this.connectionListeners.forEach((listener) => listener({ phase, message }));
+  }
+
+  onConnectionFailure(listener: ConnectionListener): () => void {
+    this.connectionListeners.add(listener);
+    return () => this.connectionListeners.delete(listener);
+  }
+
   disconnect(): void {
     if (this.socket) {
       this.socket.removeAllListeners();
+      this.socket.io.off('reconnect_failed');
+      this.socket.io.off('reconnect');
       this.socket.disconnect();
       this.socket = null;
     }
     this.boardId = null;
+    this.username = null;
+    this.joined = false;
+    this.connectionListeners.clear();
+  }
+
+  /**
+   * 手动重连（异常横幅的「重试」）：只重建传输层，
+   * 保留失败订阅与房间信息，不触碰本地数据，因此不会重复提交任何操作。
+   */
+  reconnect(): void {
+    this.joined = false;
+    this.terminalReported = false; // 允许本次重试再次上报失败
+    if (this.socket) {
+      this.socket.disconnect();
+      this.socket.connect();
+    } else {
+      this.connect();
+    }
+    if (this.boardId && this.username) {
+      this.joinBoard(this.boardId, this.username);
+    }
   }
 
   joinBoard(boardId: string, username: string): void {
+    // 幂等：同一房间不重复 join，避免重试导致的重复提交
+    if (this.joined && this.boardId === boardId) return;
     this.boardId = boardId;
+    this.username = username;
     this.socket?.emit('join-board', { boardId, username });
+    this.joined = true;
   }
 
   moveCursor(x: number, y: number): void {
-    if (this.boardId) {
+    if (this.boardId && this.joined) {
       this.socket?.emit('cursor-move', { boardId: this.boardId, x, y });
     }
   }
 
   drawElement(element: BoardElement, layerIndex: number): void {
-    if (this.boardId) {
+    if (this.boardId && this.joined) {
       this.socket?.emit('draw-element', { boardId: this.boardId, element, layerIndex });
     }
   }
 
   updateElement(elementId: string, updates: Partial<BoardElement>, layerIndex: number): void {
-    if (this.boardId) {
+    if (this.boardId && this.joined) {
       this.socket?.emit('update-element', { boardId: this.boardId, elementId, updates, layerIndex });
     }
   }
 
   deleteElement(elementId: string, layerIndex: number): void {
-    if (this.boardId) {
+    if (this.boardId && this.joined) {
       this.socket?.emit('delete-element', { boardId: this.boardId, elementId, layerIndex });
     }
   }
 
   addStickyNote(note: BoardElement, layerIndex: number): void {
-    if (this.boardId) {
+    if (this.boardId && this.joined) {
       this.socket?.emit('add-sticky-note', { boardId: this.boardId, note, layerIndex });
     }
   }
 
   addShape(shape: BoardElement, layerIndex: number): void {
-    if (this.boardId) {
+    if (this.boardId && this.joined) {
       this.socket?.emit('add-shape', { boardId: this.boardId, shape, layerIndex });
     }
   }
 
   updateLayers(layers: Layer[]): void {
-    if (this.boardId) {
+    if (this.boardId && this.joined) {
       this.socket?.emit('layer-update', { boardId: this.boardId, layers });
     }
   }
 
   canvasTransform(transform: CanvasTransform): void {
-    if (this.boardId) {
+    if (this.boardId && this.joined) {
       this.socket?.emit('canvas-transform', { boardId: this.boardId, transform });
     }
   }

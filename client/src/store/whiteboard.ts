@@ -31,6 +31,8 @@ interface WhiteboardState {
   removeCursor: (socketId: string) => void;
   setCursors: (cursors: CursorPosition[]) => void;
   setUsername: (name: string) => void;
+  /** 离开画板 / 退出到安全页面时重置会话，避免异常状态残留到下一次进入 */
+  resetSession: () => void;
 }
 
 export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
@@ -136,4 +138,13 @@ export const useWhiteboardStore = create<WhiteboardState>((set, get) => ({
   },
 
   setUsername: (name) => set({ username: name }),
+
+  resetSession: () =>
+    set({
+      board: null,
+      activeTool: 'pen',
+      activeLayerIndex: 0,
+      cursors: new Map(),
+      canvasTransform: { scale: 1, translateX: 0, translateY: 0 },
+    }),
 }));

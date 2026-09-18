@@ -1,11 +1,15 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Board } from '../types';
 import { boardApi, templateApi } from '../services/api';
 import { useWhiteboardStore } from '../store/whiteboard';
+import { useErrorStore } from '../store/error';
 import { TemplateCenter } from './TemplateCenter';
+import { RegionBoundary } from './ErrorBoundary';
+import { RegionErrorPanel } from './RegionErrorPanel';
+import { RecoveryPanel } from './RecoveryPanel';
 
 interface DashboardProps {
-  onBoardSelect: (board: Board) => void;
+  onBoardSelect: (board: Board, options?: { preferRecovery?: boolean }) => void;
 }
 
 const formatDate = (dateStr: string): string => {
@@ -135,23 +139,36 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
   const [isTemplateCenterOpen, setIsTemplateCenterOpen] = useState(false);
   const username = useWhiteboardStore((state) => state.username);
 
+  // 接口请求异常也走统一的区域错误状态，避免被吞掉后只剩空白/一直加载
+  const dashboardError = useErrorStore((s) => s.regions.dashboard);
+  const dashboardAttempts = useErrorStore((s) => s.attempts.dashboard ?? 0);
+
   const userId = 'user-1';
 
-  useEffect(() => {
-    loadBoards();
-  }, []);
-
-  const loadBoards = async () => {
+  const loadBoards = useCallback(async (mode: 'initial' | 'retry' = 'initial') => {
+    if (mode === 'retry') {
+      const canRetry = useErrorStore.getState().registerRetry('dashboard');
+      if (!canRetry) return; // 连续异常，已升级到安全页面
+    }
     try {
       setLoading(true);
       const data = await boardApi.getBoards(userId);
       setBoards(data);
+      const errors = useErrorStore.getState();
+      errors.clearError('dashboard');
+      errors.resetAttempts('dashboard');
     } catch (error) {
       console.error('Failed to load boards:', error);
+      // 异常说明随每次失败更新，不残留旧信息
+      useErrorStore.getState().reportError('dashboard', error, 'request');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    void loadBoards('initial');
+  }, [loadBoards]);
 
   const handleCreateBoard = async (name: string, templateId?: string) => {
     try {
@@ -172,6 +189,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
       alert('创建白板失败，请重试');
     }
   };
+
+  const handleOpenDraft = useCallback(
+    (board: Board) => {
+      onBoardSelect(board, { preferRecovery: true });
+    },
+    [onBoardSelect]
+  );
+
+  const handleRecoveryUnreadable = useCallback((message: string) => {
+    useErrorStore.getState().escalateToFatal(message);
+  }, []);
 
   const myBoards = boards.filter((b) => b.ownerId === userId);
   const sharedBoards = boards.filter((b) => b.ownerId !== userId);
@@ -405,69 +433,102 @@ export const Dashboard: React.FC<DashboardProps> = ({ onBoardSelect }) => {
         </div>
       </header>
 
-      <main style={{ maxWidth: '1280px', margin: '0 auto', padding: '32px' }}>
-        <div
-          style={{
-            background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-            borderRadius: '16px',
-            padding: '40px',
-            marginBottom: '40px',
-            color: '#fff',
-          }}
-        >
-          <h1
+      <main style={{ maxWidth: '1280px', margin: '0 auto', padding: '32px', position: 'relative', minHeight: '60vh' }}>
+        {dashboardError ? (
+          <RegionErrorPanel
+            title="白板列表加载失败"
+            message={dashboardError.message}
+            source={dashboardError.source}
+            onRetry={() => void loadBoards('retry')}
+            retryDisabled={dashboardAttempts >= 1}
+          >
+            <RecoveryPanel
+              onRestore={handleOpenDraft}
+              onUnrecoverable={handleRecoveryUnreadable}
+              embedded
+            />
+          </RegionErrorPanel>
+        ) : (
+          <RegionBoundary region="dashboard" title="工作台内容显示异常">
+          <div
             style={{
-              margin: 0,
-              fontSize: '28px',
-              fontWeight: 700,
-              marginBottom: '8px',
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              borderRadius: '16px',
+              padding: '40px',
+              marginBottom: '40px',
+              color: '#fff',
             }}
           >
-            欢迎回来，{username}
-          </h1>
-          <p style={{ margin: 0, fontSize: '15px', opacity: 0.9 }}>
-            继续你的创作，或者开始一个新的白板
-          </p>
-          <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
-            <button
-              onClick={() => setIsTemplateCenterOpen(true)}
+            <h1
               style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-                padding: '10px 20px',
-                fontSize: '14px',
-                fontWeight: 500,
-                color: '#667eea',
-                background: '#fff',
-                border: 'none',
-                borderRadius: '8px',
-                cursor: 'pointer',
+                margin: 0,
+                fontSize: '28px',
+                fontWeight: 700,
+                marginBottom: '8px',
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <line x1="12" y1="5" x2="12" y2="19" />
-                <line x1="5" y1="12" x2="19" y2="12" />
-              </svg>
-              新建白板
-            </button>
+              欢迎回来，{username}
+            </h1>
+            <p style={{ margin: 0, fontSize: '15px', opacity: 0.9 }}>
+              继续你的创作，或者开始一个新的白板
+            </p>
+            <div style={{ display: 'flex', gap: '12px', marginTop: '24px' }}>
+              <button
+                onClick={() => setIsTemplateCenterOpen(true)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '6px',
+                  padding: '10px 20px',
+                  fontSize: '14px',
+                  fontWeight: 500,
+                  color: '#667eea',
+                  background: '#fff',
+                  border: 'none',
+                  borderRadius: '8px',
+                  cursor: 'pointer',
+                }}
+              >
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                  <line x1="12" y1="5" x2="12" y2="19" />
+                  <line x1="5" y1="12" x2="19" y2="12" />
+                </svg>
+                新建白板
+              </button>
+            </div>
           </div>
-        </div>
 
-        <section style={{ marginBottom: '40px' }}>
-          <SectionHeader title="最近编辑" count={loading ? undefined : recentBoards.length} />
-          <BoardGrid boards={recentBoards.slice(0, 8)} loading={loading && boards.length === 0} />
-        </section>
+          <section style={{ marginBottom: '40px' }}>
+            <SectionHeader title="最近编辑" count={loading ? undefined : recentBoards.length} />
+            <BoardGrid boards={recentBoards.slice(0, 8)} loading={loading && boards.length === 0} />
+          </section>
 
-        <section style={{ marginBottom: '40px' }}>
-          <SectionHeader title="我创建的" count={loading ? undefined : myBoards.length} />
-          <BoardGrid boards={myBoards} loading={loading && boards.length === 0} />
-        </section>
+          <section style={{ marginBottom: '40px' }}>
+            <SectionHeader title="我创建的" count={loading ? undefined : myBoards.length} />
+            <BoardGrid boards={myBoards} loading={loading && boards.length === 0} />
+          </section>
 
-        <section>
-          <SectionHeader title="我参与的" count={loading ? undefined : sharedBoards.length} />
-          <BoardGrid boards={sharedBoards} loading={loading && boards.length === 0} />
-        </section>
+          <section style={{ marginBottom: '40px' }}>
+            <SectionHeader title="我参与的" count={loading ? undefined : sharedBoards.length} />
+            <BoardGrid boards={sharedBoards} loading={loading && boards.length === 0} />
+          </section>
+
+          {/* 工作台入口的本地草稿恢复：与画板页面的恢复面板共享同一份数据 */}
+          <section
+            style={{
+              background: '#fff',
+              border: '1px solid #e5e7eb',
+              borderRadius: '12px',
+              padding: '20px 24px',
+            }}
+          >
+            <RecoveryPanel
+              onRestore={handleOpenDraft}
+              onUnrecoverable={handleRecoveryUnreadable}
+            />
+          </section>
+          </RegionBoundary>
+        )}
       </main>
 
       <TemplateCenter
